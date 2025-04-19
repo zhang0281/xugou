@@ -11,27 +11,27 @@ interface DbResultMeta {
  * 监控相关的数据库操作
  */
 
-// 清理30天以前的历史记录
+// 清理2天以前的历史记录
 export async function cleanupOldRecords(db: Bindings['DB']) {
   try {
-    console.log('开始清理30天以前的历史记录...');
+    console.log('开始清理2天以前的历史记录...');
     
     // 清理监控状态历史记录
     const deleteStatusHistoryResult = await db.prepare(`
       DELETE FROM monitor_status_history 
-      WHERE timestamp < datetime('now', '-30 days')
+      WHERE timestamp < datetime('now', '-2 days')
     `).run();
     
     // 清理监控检查记录
     const deleteChecksResult = await db.prepare(`
       DELETE FROM monitor_checks 
-      WHERE checked_at < datetime('now', '-30 days')
+      WHERE checked_at < datetime('now', '-2 days')
     `).run();
     
     // 清理通知历史记录
     const deleteNotificationHistoryResult = await db.prepare(`
       DELETE FROM notification_history 
-      WHERE sent_at < datetime('now', '-30 days')
+      WHERE sent_at < datetime('now', '-2 days')
     `).run();
     
     const statusHistoryDeleted = (deleteStatusHistoryResult.meta as DbResultMeta)?.changes || 0;
