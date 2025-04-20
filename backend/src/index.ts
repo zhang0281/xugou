@@ -67,7 +67,7 @@ export default {
     }
 
     // 如果是 OPTIONS 请求，直接处理
-    if (request.method === 'OPTIONS'&&false) {
+    if (request.method === 'OPTIONS') {
       console.log('Worker入口层面: 捕获到OPTIONS请求，直接返回');
       return new Response(null, {
         status: 204,
