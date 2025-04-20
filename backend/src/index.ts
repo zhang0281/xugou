@@ -67,7 +67,7 @@ export default {
     }
 
     // 如果是 OPTIONS 请求，直接处理
-    if (request.method === 'OPTIONS') {
+    /*if (request.method === 'OPTIONS') {
       console.log('Worker入口层面: 捕获到OPTIONS请求，直接返回');
       return new Response(null, {
         status: 204,
@@ -78,7 +78,7 @@ export default {
           'Access-Control-Max-Age': '86400',
         }
       });
-    }
+    }*/
 
     try {
       // 如果数据库尚未初始化，则进行初始化检查
