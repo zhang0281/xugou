@@ -12,7 +12,7 @@ export interface Monitor {
   expected_status?: number;
   interval: number;
   timeout: number;
-  status: 'up' | 'down' | 'pending' | 'unknown';
+  status: "up" | "down" | "pending" | "unknown";
   last_checked?: string;
   uptime_percentage?: number;
   uptime?: number;
@@ -25,14 +25,10 @@ export interface Monitor {
   history?: MonitorStatusHistory[];
 }
 
-export interface MonitorWithSelection extends Monitor {
-  selected: boolean;
-}
-
 export interface MonitorStatusHistory {
   id: number;
   monitor_id: number;
-  status: 'up' | 'down';
+  status: "up" | "down";
   response_time?: number;
   timestamp?: string;
   status_code?: number;
