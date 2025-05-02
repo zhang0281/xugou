@@ -3,51 +3,12 @@ import {
   Monitor,
   MonitorStatusHistory,
   DbResultMeta,
+  MonitorDailyStats,
 } from "../models";
 
 /**
  * 监控相关的数据库操作
  */
-
-// 清理30天以前的历史记录
-export async function cleanupOldRecords(db: Bindings["DB"]) {
-  console.log("开始清理30天以前的历史记录...");
-
-  // 清理监控状态历史记录
-  const deleteStatusHistoryResult = await db
-    .prepare(
-      `
-      DELETE FROM monitor_status_history 
-      WHERE timestamp < datetime('now', '-30 days')
-    `
-    )
-    .run();
-
-  // 清理通知历史记录
-  const deleteNotificationHistoryResult = await db
-    .prepare(
-      `
-      DELETE FROM notification_history 
-      WHERE sent_at < datetime('now', '-30 days')
-    `
-    )
-    .run();
-
-  const statusHistoryDeleted =
-    (deleteStatusHistoryResult.meta as DbResultMeta)?.changes || 0;
-  const notificationHistoryDeleted =
-    (deleteNotificationHistoryResult.meta as DbResultMeta)?.changes || 0;
-
-  console.log(
-    `清理完成：删除了 ${statusHistoryDeleted} 条状态历史记录，${notificationHistoryDeleted} 条通知历史记录`
-  );
-
-  return {
-    success: true,
-    statusHistoryDeleted,
-    notificationHistoryDeleted,
-  };
-}
 
 // 获取需要检查的监控列表
 export async function getMonitorsToCheck(db: Bindings["DB"]) {
@@ -94,30 +55,41 @@ export async function getMonitorById(db: Bindings["DB"], id: number) {
   return monitor;
 }
 
-// 批量获取监控项详情
-export async function getMonitorsByIds(
-  db: Bindings["DB"],
-  monitorIds: number[]
-) {
-  if (monitorIds.length === 0) {
-    return { results: [] };
+// 获取所有监控
+export async function getAllMonitors(db: Bindings["DB"]) {
+  const result = await db
+    .prepare("SELECT * FROM monitors ORDER BY created_at DESC")
+    .all<Monitor>();
+
+  // 解析所有监控的 headers 字段
+  if (result.results) {
+    result.results.forEach((monitor) => {
+      if (typeof monitor.headers === "string") {
+        try {
+          monitor.headers = JSON.parse(monitor.headers);
+        } catch (e) {
+          monitor.headers = {};
+        }
+      }
+    });
   }
 
-  const placeholders = monitorIds.map(() => "?").join(",");
-  return await db
-    .prepare(`SELECT * FROM monitors WHERE id IN (${placeholders})`)
-    .bind(...monitorIds)
-    .all<Monitor>();
+  return {
+    success: true,
+    monitors: result.results || [],
+    status: 200,
+  };
 }
 
-// 获取监控状态历史
-export async function getMonitorStatusHistory(
+
+// 获取单个监控状态历史 24小时内
+export async function getMonitorStatusHistoryIn24h(
   db: Bindings["DB"],
   monitorId: number
 ) {
   return await db
     .prepare(
-      `SELECT * FROM monitor_status_history 
+      `SELECT * FROM monitor_status_history_24h 
      WHERE monitor_id = ? 
      ORDER BY timestamp ASC`
     )
@@ -125,7 +97,16 @@ export async function getMonitorStatusHistory(
     .all<MonitorStatusHistory>();
 }
 
-// 记录监控状态历史
+// 获取所有监控状态历史 24小时内
+export async function getAllMonitorStatusHistoryIn24h(db: Bindings["DB"]) {
+  return await db
+    .prepare(
+      `SELECT * FROM monitor_status_history_24h
+     ORDER BY timestamp ASC`
+    )
+    .all<MonitorStatusHistory>();
+}
+// 记录监控状态历史到热表
 export async function insertMonitorStatusHistory(
   db: Bindings["DB"],
   monitorId: number,
@@ -139,7 +120,7 @@ export async function insertMonitorStatusHistory(
 
   return await db
     .prepare(
-      `INSERT INTO monitor_status_history (monitor_id, status, timestamp, response_time, status_code, error) 
+      `INSERT INTO monitor_status_history_24h (monitor_id, status, timestamp, response_time, status_code, error) 
      VALUES (?, ?, ?, ?, ?, ?)`
     )
     .bind(monitorId, status, now, response_time, status_code, error)
@@ -164,7 +145,7 @@ export async function updateMonitorStatus(
          response_time = ?,
          uptime = (
            SELECT ROUND((COUNT(CASE WHEN status = 'up' THEN 1 ELSE NULL END) * 100.0 / COUNT(*)), 2)
-           FROM monitor_status_history
+           FROM monitor_status_history_24h
            WHERE monitor_id = ?
            ORDER BY timestamp DESC
            LIMIT 100
@@ -172,46 +153,6 @@ export async function updateMonitorStatus(
      WHERE id = ?`
     )
     .bind(status, now, responseTime, monitorId, monitorId)
-    .run();
-}
-
-// 记录监控出错状态
-export async function recordMonitorError(
-  db: Bindings["DB"],
-  monitorId: number,
-  response_time: number,
-  errorMessage: string
-) {
-  // 记录错误状态
-  await insertMonitorStatusHistory(
-    db,
-    monitorId,
-    "down",
-    response_time,
-    0,
-    errorMessage
-  );
-
-  // 使用ISO格式的时间戳
-  const now = new Date().toISOString();
-
-  // 更新监控状态
-  return await db
-    .prepare(
-      `UPDATE monitors 
-     SET status = 'down',
-         last_checked = ?,
-         response_time = 0,
-         uptime = (
-           SELECT ROUND((COUNT(CASE WHEN status = 'up' THEN 1 ELSE NULL END) * 100.0 / COUNT(*)), 2)
-           FROM monitor_status_history
-           WHERE monitor_id = ?
-           ORDER BY timestamp DESC
-           LIMIT 100
-         )
-     WHERE id = ?`
-    )
-    .bind(now, monitorId, monitorId)
     .run();
 }
 
@@ -374,8 +315,9 @@ export async function updateMonitorConfig(
 // 删除监控
 export async function deleteMonitor(db: Bindings["DB"], id: number) {
   // 先删除关联的历史数据
+
   await db
-    .prepare("DELETE FROM monitor_status_history WHERE monitor_id = ?")
+    .prepare("DELETE FROM monitor_status_history_24h WHERE monitor_id = ?")
     .bind(id)
     .run();
 
@@ -383,70 +325,41 @@ export async function deleteMonitor(db: Bindings["DB"], id: number) {
   return await db.prepare("DELETE FROM monitors WHERE id = ?").bind(id).run();
 }
 
-/**
- * 获取所有监控
- * @param db 数据库连接
- * @returns 监控列表和操作结果
- */
-export async function getAllMonitors(db: Bindings["DB"]) {
-  // 根据用户角色过滤监控
-  let result;
-  result = await db
-    .prepare("SELECT * FROM monitors ORDER BY created_at DESC")
-    .all<Monitor>();
+export async function getMonitorDailyStatsById(db: Bindings["DB"], id: number) {
+  // 查询每日统计数据
+  const result = await db
+    .prepare(
+      `
+      SELECT 
+        date,
+        total_checks,
+        up_checks,
+        down_checks,
+        avg_response_time,
+        min_response_time,
+        max_response_time,
+        availability
+      FROM 
+        monitor_daily_stats
+      WHERE 
+        monitor_id = ?
+      ORDER BY
+        date ASC
+    `
+    )
+    .bind(id)
+    .all<MonitorDailyStats>();
 
-  // 解析所有监控的 headers 字段
-  if (result.results && result.results.length > 0) {
-    result.results.forEach((monitor) => {
-      if (typeof monitor.headers === "string") {
-        try {
-          monitor.headers = JSON.parse(monitor.headers);
-        } catch (e) {
-          monitor.headers = {};
-        }
-      }
-    });
-
-    // 获取所有监控的历史状态数据
-    const monitorsWithHistory = await Promise.all(
-      result.results.map(async (monitor) => {
-        const historyResult = await db
-          .prepare(
-            `SELECT * FROM monitor_status_history 
-           WHERE monitor_id = ? 
-           ORDER BY timestamp ASC`
-          )
-          .bind(monitor.id)
-          .all<MonitorStatusHistory>();
-
-        return {
-          ...monitor,
-          history: historyResult.results || [],
-        };
-      })
-    );
-
-    return {
-      success: true,
-      monitors: monitorsWithHistory,
-      status: 200,
-    };
-  }
-
-  return {
-    success: true,
-    monitors: result.results || [],
-    status: 200,
-  };
+  return result;
 }
 
 /**
- * 获取所有监控（不包含历史状态数据）
+ * 获取所有监控的每日统计数据
  * @param db 数据库连接
- * @returns 监控列表和操作结果
+ * @returns 所有监控的每日统计数据和操作结果
  */
-export async function getAllMonitorsWithoutHistory(db: Bindings["DB"]) {
+export async function getAllMonitorDailyStats(db: Bindings["DB"]) {
   return await db
-    .prepare("SELECT * FROM monitors ORDER BY created_at DESC")
-    .all<Monitor>();
+    .prepare("SELECT * FROM monitor_daily_stats ORDER BY date ASC")
+    .all<MonitorDailyStats>();
 }

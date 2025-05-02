@@ -1,10 +1,7 @@
 import { Hono } from "hono";
 import { Bindings } from "../models/db";
 import { Monitor } from "../models/monitor";
-import {
-  getMonitorsToCheck,
-  checkSingleMonitor as monitorServiceCheck,
-} from "../services";
+import { getMonitorsToCheck, checkMonitor } from "../services";
 import { shouldSendNotification, sendNotification } from "../services";
 
 const monitorTask = new Hono<{ Bindings: Bindings }>();
@@ -30,7 +27,7 @@ async function checkMonitors(c: any) {
       monitors.results.map(async (monitorItem: any) => {
         // 确保正确的类型转换
         const monitor = monitorItem as Monitor;
-        const checkResult = await checkSingleMonitor(c, monitor);
+        const checkResult = await checkMonitor(c.env.DB, monitor);
 
         // 处理通知
         await handleMonitorNotification(c, monitor, checkResult);
@@ -49,12 +46,6 @@ async function checkMonitors(c: any) {
     console.error("监控检查出错:", error);
     return { success: false, message: "监控检查出错", error: String(error) };
   }
-}
-
-// 检查单个监控的函数
-async function checkSingleMonitor(c: any, monitor: Monitor) {
-  // 使用服务层的检查函数
-  return await monitorServiceCheck(c.env.DB, monitor);
 }
 
 // 处理监控通知
@@ -159,11 +150,232 @@ async function handleMonitorNotification(
   }
 }
 
+// 从24小时热表生成每日监控统计数据的函数
+async function generateDailyStats(c: any) {
+  try {
+    console.log("开始从24小时热表生成每日监控统计数据...");
+
+    // 获取前一天的日期 (YYYY-MM-DD 格式)
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate());
+    const dateStr = yesterday.toISOString().split("T")[0];
+
+    console.log(`正在处理日期 ${dateStr} 的数据`);
+
+    // 时间范围
+    const startTime = `${dateStr}T00:00:00.000Z`;
+    const endTime = `${dateStr}T23:59:59.999Z`;
+
+    // 一次性获取所有监控
+    const monitorsResult = await c.env.DB.prepare(
+      "SELECT id, name FROM monitors"
+    ).all();
+
+    if (!monitorsResult.results || monitorsResult.results.length === 0) {
+      console.log("没有找到监控");
+      return { success: true, message: "没有监控", processed: 0 };
+    }
+
+    const monitors = monitorsResult.results;
+    console.log(`找到 ${monitors.length} 个监控`);
+
+    // 创建监控ID列表
+    const monitorIds = monitors.map((m: any) => m.id);
+
+    // 从24小时热表获取监控历史记录
+    console.log(
+      `从24小时热表查询所有监控在 ${startTime} 至 ${endTime} 的历史记录`
+    );
+
+    const historyResult = await c.env.DB.prepare(
+      `
+      SELECT 
+        monitor_id, 
+        status, 
+        response_time 
+      FROM 
+        monitor_status_history_24h 
+      WHERE 
+        timestamp >= ? AND 
+        timestamp <= ?
+    `
+    )
+      .bind(startTime, endTime)
+      .all();
+
+    if (!historyResult.results || historyResult.results.length === 0) {
+      console.log(`在 ${dateStr} 没有找到任何监控历史记录`);
+      return { success: true, message: "没有历史记录", processed: 0 };
+    }
+
+    console.log(`找到 ${historyResult.results.length} 条历史记录`);
+
+    // 按监控ID分组处理数据
+    const statsMap = new Map();
+
+    // 初始化每个监控的统计数据结构
+    for (const monitorId of monitorIds) {
+      statsMap.set(monitorId, {
+        monitorId,
+        totalChecks: 0,
+        upChecks: 0,
+        downChecks: 0,
+        responseTimes: [],
+        avgResponseTime: 0,
+        minResponseTime: 0,
+        maxResponseTime: 0,
+        availability: 0,
+      });
+    }
+
+    // 处理所有历史记录
+    for (const record of historyResult.results) {
+      const monitorId = record.monitor_id;
+
+      if (!statsMap.has(monitorId)) continue;
+
+      const stats = statsMap.get(monitorId);
+      stats.totalChecks++;
+
+      if (record.status === "up") {
+        stats.upChecks++;
+      } else if (record.status === "down") {
+        stats.downChecks++;
+      }
+
+      if (record.response_time != null && record.response_time > 0) {
+        stats.responseTimes.push(record.response_time);
+      }
+    }
+
+    // 处理每个监控的响应时间统计和可用率计算
+    for (const [monitorId, stats] of statsMap.entries()) {
+      if (stats.totalChecks === 0) continue;
+
+      if (stats.responseTimes.length > 0) {
+        stats.avgResponseTime =
+          stats.responseTimes.reduce(
+            (sum: number, time: number) => sum + time,
+            0
+          ) / stats.responseTimes.length;
+        stats.minResponseTime = Math.min(...stats.responseTimes);
+        stats.maxResponseTime = Math.max(...stats.responseTimes);
+      }
+
+      stats.availability =
+        stats.totalChecks > 0 ? (stats.upChecks / stats.totalChecks) * 100 : 0;
+
+      delete stats.responseTimes;
+    }
+
+    // 将统计数据写入数据库
+    const now = new Date().toISOString();
+    let processed = 0;
+
+    for (const [monitorId, stats] of statsMap.entries()) {
+      if (stats.totalChecks === 0) continue;
+
+      const monitor = monitors.find((m: any) => m.id === monitorId);
+      const monitorName = monitor ? monitor.name : `ID: ${monitorId}`;
+
+      try {
+        console.log(
+          `监控 ${monitorName} (ID: ${monitorId}) 数据: 总检查=${
+            stats.totalChecks
+          }, 正常=${stats.upChecks}, 故障=${
+            stats.downChecks
+          }, 可用率=${stats.availability.toFixed(2)}%`
+        );
+
+        await c.env.DB.prepare(
+          `
+          INSERT INTO monitor_daily_stats (
+            monitor_id,
+            date,
+            total_checks,
+            up_checks,
+            down_checks,
+            avg_response_time,
+            min_response_time,
+            max_response_time,
+            availability,
+            created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `
+        )
+          .bind(
+            monitorId,
+            dateStr,
+            stats.totalChecks,
+            stats.upChecks,
+            stats.downChecks,
+            stats.avgResponseTime,
+            stats.minResponseTime,
+            stats.maxResponseTime,
+            stats.availability,
+            now
+          )
+          .run();
+
+        processed++;
+        console.log(`成功更新监控 ID ${monitorId} 的每日统计数据`);
+      } catch (error) {
+        console.error(`更新监控 ID ${monitorId} 的每日统计数据时出错:`, error);
+      }
+    }
+
+    console.log(`每日统计数据生成完成，成功处理了 ${processed} 个监控`);
+
+    // 从 24h 表中删除已处理的数据
+    console.log(`开始从24小时热表删除已处理的数据`);
+    const deleteResult = await c.env.DB.prepare(
+      `
+      DELETE FROM monitor_status_history_24h
+      WHERE
+        timestamp >=? AND
+        timestamp <=?
+    `
+    )
+      .bind(startTime, endTime)
+      .run();
+    console.log(`从24小时热表删除已处理的数据完成`);
+
+    return {
+      success: true,
+      message: "每日统计数据生成完成",
+      processed: processed,
+      date: dateStr,
+    };
+  } catch (error) {
+    console.error("生成每日统计数据时出错:", error);
+    return {
+      success: false,
+      message: "生成每日统计数据时出错",
+      error: String(error),
+    };
+  }
+}
 // 在 Cloudflare Workers 中设置定时触发器
 export default {
   async scheduled(event: any, env: any, ctx: any) {
     const c = { env };
-    await checkMonitors(c);
+
+    // 默认执行监控检查任务
+    let result: any = await checkMonitors(c);
+
+    const now = new Date();
+    const hour = now.getUTCHours();
+    const minute = now.getUTCMinutes();
+
+    if (hour === 0 && minute === 5) {
+      // 生成每日监控统计数据
+      const statsResult = await generateDailyStats(c);
+      if (statsResult.error) {
+        console.error("生成每日监控统计数据时出错:", statsResult.error);
+      }
+    }
+
+    return result;
   },
   fetch: monitorTask.fetch,
 };
