@@ -265,19 +265,19 @@ export const getGlobalSettings = async (): Promise<{
   monitorSettings: NotificationSettings | null;
   agentSettings: NotificationSettings | null;
 }> => {
-  const monitorSettings = await db
+  const monitorSettingsResult = await db
     .select()
     .from(notificationSettings)
     .where(eq(notificationSettings.target_type, "global-monitor"));
 
-  const agentSettings = await db
+  const agentSettingsResult = await db
     .select()
     .from(notificationSettings)
     .where(eq(notificationSettings.target_type, "global-agent"));
 
   return {
-    monitorSettings,
-    agentSettings,
+    monitorSettings: monitorSettingsResult.length > 0 ? monitorSettingsResult[0] : null,
+    agentSettings: agentSettingsResult.length > 0 ? agentSettingsResult[0] : null,
   };
 };
 
@@ -318,26 +318,9 @@ export const createOrUpdateSettings = async (
       )
     );
 
-  if (existingSettings) {
+  if (existingSettings.length > 0) {
     // 如果存在则更新
-    const sets: string[] = [];
-    const values: any[] = [];
-
-    // 动态构建UPDATE语句
-    Object.entries(settings).forEach(([key, value]) => {
-      if (key !== "target_type" && key !== "target_id") {
-        sets.push(`${key} = ?`);
-
-        if (typeof value === "boolean") {
-          values.push(value ? 1 : 0);
-        } else {
-          values.push(value);
-        }
-      }
-    });
-
-    sets.push("updated_at = CURRENT_TIMESTAMP");
-    values.push(existingSettings.id);
+    const existingSetting = existingSettings[0];
 
     await db
       .update(notificationSettings)
@@ -355,29 +338,17 @@ export const createOrUpdateSettings = async (
         channels: settings.channels,
         updated_at: new Date().toISOString(),
       })
-      .where(eq(notificationSettings.id, existingSettings.id));
+      .where(eq(notificationSettings.id, existingSetting.id));
 
-    return existingSettings.id;
+    return existingSetting.id;
   } else {
     // 如果不存在则创建
-    const keys: string[] = [];
-    const placeholders: string[] = [];
-    const values: any[] = [];
-
-    Object.entries(settings).forEach(([key, value]) => {
-      keys.push(key);
-      placeholders.push("?");
-
-      if (typeof value === "boolean") {
-        values.push(value ? 1 : 0);
-      } else {
-        values.push(value);
-      }
-    });
-
     const result = await db
       .insert(notificationSettings)
       .values({
+        user_id: settings.user_id,
+        target_type: settings.target_type,
+        target_id: settings.target_id,
         enabled: settings.enabled ? 1 : 0,
         on_down: settings.on_down ? 1 : 0,
         on_recovery: settings.on_recovery ? 1 : 0,

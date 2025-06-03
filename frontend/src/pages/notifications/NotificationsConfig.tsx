@@ -965,7 +965,7 @@ const NotificationsConfig = () => {
                             type="number"
                             min="0"
                             max="100"
-                            value={settings.agents.cpuThreshold.toString()}
+                            value={(settings.agents.cpuThreshold ?? 90).toString()}
                             onChange={(e) =>
                               handleAgentSettingChange(
                                 "cpuThreshold",
@@ -1004,7 +1004,7 @@ const NotificationsConfig = () => {
                             type="number"
                             min="0"
                             max="100"
-                            value={settings.agents.memoryThreshold.toString()}
+                            value={(settings.agents.memoryThreshold ?? 85).toString()}
                             onChange={(e) =>
                               handleAgentSettingChange(
                                 "memoryThreshold",
@@ -1040,7 +1040,7 @@ const NotificationsConfig = () => {
                             type="number"
                             min="0"
                             max="100"
-                            value={settings.agents.diskThreshold.toString()}
+                            value={(settings.agents.diskThreshold ?? 90).toString()}
                             onChange={(e) =>
                               handleAgentSettingChange(
                                 "diskThreshold",
@@ -1309,7 +1309,7 @@ const NotificationsConfig = () => {
                             type="number"
                             min="0"
                             max="100"
-                            value={specificSettings.cpuThreshold.toString()}
+                            value={(specificSettings.cpuThreshold ?? 90).toString()}
                             onChange={(e) =>
                               handleSpecificAgentSettingChange(
                                 agentId,
@@ -1350,7 +1350,7 @@ const NotificationsConfig = () => {
                             type="number"
                             min="0"
                             max="100"
-                            value={specificSettings.memoryThreshold.toString()}
+                            value={(specificSettings.memoryThreshold ?? 85).toString()}
                             onChange={(e) =>
                               handleSpecificAgentSettingChange(
                                 agentId,
@@ -1391,7 +1391,7 @@ const NotificationsConfig = () => {
                             type="number"
                             min="0"
                             max="100"
-                            value={specificSettings.diskThreshold.toString()}
+                            value={(specificSettings.diskThreshold ?? 90).toString()}
                             onChange={(e) =>
                               handleSpecificAgentSettingChange(
                                 agentId,
