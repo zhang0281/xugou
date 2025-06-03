@@ -16,4 +16,4 @@ database_id = "6a957714-92ff-45e0-848b-59cd16588a2f"
 binding = "CF_VERSION_METADATA"
 
 [observability.logs]
- enabled = true
+enabled = true

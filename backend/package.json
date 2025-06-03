@@ -4,6 +4,7 @@
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
+    "rdev": "wrangler dev --test-scheduled --remote",
     "dev": "wrangler dev --test-scheduled",
     "build": "tsc && npm run generate:migrations",
     "deploy": "wrangler deploy",
