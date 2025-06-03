@@ -5,8 +5,8 @@ export async function getDashboardData() {
   const monitors = await repositories.getAllMonitors();
   const agents = await repositories.getAllAgents();
 
-  if (monitors.monitors && monitors.monitors.length > 0) {
-    monitors.monitors.forEach((monitor: Monitor) => {
+  if (monitors && monitors.length > 0) {
+    monitors.forEach((monitor: Monitor) => {
       if (typeof monitor.headers === "string") {
         try {
           monitor.headers = JSON.parse(monitor.headers);
@@ -17,7 +17,7 @@ export async function getDashboardData() {
     });
   }
   return {
-    monitors: monitors.monitors,
+    monitors: monitors,
     agents: agents,
   };
 }
